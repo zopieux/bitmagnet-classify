@@ -1,0 +1,126 @@
+{
+  "nodes": {
+    "e5-backbone": {
+      "flake": false,
+      "locked": {
+        "narHash": "sha256-9tlKYPcCL3v5sunXYpMf4+417Oi1mTwVjQttqzftxF8=",
+        "type": "file",
+        "url": "https://huggingface.co/zopieux/e5-small-torrent-nsfw/resolve/main/backbone_int8.onnx"
+      },
+      "original": {
+        "type": "file",
+        "url": "https://huggingface.co/zopieux/e5-small-torrent-nsfw/resolve/main/backbone_int8.onnx"
+      }
+    },
+    "e5-head-weights": {
+      "flake": false,
+      "locked": {
+        "narHash": "sha256-MAUR/g9hIG6AUDrWdgb1O9ONPSs9Ko335VT5JonvShk=",
+        "type": "file",
+        "url": "https://huggingface.co/zopieux/e5-small-torrent-nsfw/resolve/main/head_weights.npz"
+      },
+      "original": {
+        "type": "file",
+        "url": "https://huggingface.co/zopieux/e5-small-torrent-nsfw/resolve/main/head_weights.npz"
+      }
+    },
+    "e5-tokenizer": {
+      "flake": false,
+      "locked": {
+        "narHash": "sha256-XTTATo62TyJGEyX6D5Pb6hdWwSFIKP/ptS26Yast1f0=",
+        "type": "file",
+        "url": "https://huggingface.co/zopieux/e5-small-torrent-nsfw/resolve/main/tokenizer.json"
+      },
+      "original": {
+        "type": "file",
+        "url": "https://huggingface.co/zopieux/e5-small-torrent-nsfw/resolve/main/tokenizer.json"
+      }
+    },
+    "e5-tokenizer-config": {
+      "flake": false,
+      "locked": {
+        "narHash": "sha256-GvLY7kOPTkYrq36S2xWvcInvdvmKFAJx9PDn83X4l8k=",
+        "type": "file",
+        "url": "https://huggingface.co/zopieux/e5-small-torrent-nsfw/resolve/main/tokenizer_config.json"
+      },
+      "original": {
+        "type": "file",
+        "url": "https://huggingface.co/zopieux/e5-small-torrent-nsfw/resolve/main/tokenizer_config.json"
+      }
+    },
+    "fasttext-model": {
+      "flake": false,
+      "locked": {
+        "narHash": "sha256-EHV/m5MfRRUJZOjNBPv8CnXAXobfFX3QkvLkMTczJgM=",
+        "type": "file",
+        "url": "https://huggingface.co/julien-c/fasttext-language-id/resolve/main/lid.176.ftz"
+      },
+      "original": {
+        "type": "file",
+        "url": "https://huggingface.co/julien-c/fasttext-language-id/resolve/main/lid.176.ftz"
+      }
+    },
+    "flake-utils": {
+      "inputs": {
+        "systems": "systems"
+      },
+      "locked": {
+        "lastModified": 1791914995,
+        "narHash": "sha256-Zf/xfQEAasnwnmEfHqW/4hjDE/s44yn2hD4RuVIZRjA=",
+        "owner": "numtide",
+        "repo": "flake-utils",
+        "rev": "b7a79d3fea1e214f6d668d521cecec0c01e26544",
+        "type": "github"
+      },
+      "original": {
+        "owner": "numtide",
+        "repo": "flake-utils",
+        "type": "github"
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1791956154,
+        "narHash": "sha256-jBYGPi4udQ9uo4KQp9m2J0546nJVQitG15gvZSaVVAs=",
+        "owner": "nixos",
+        "repo": "nixpkgs",
+        "rev": "55bfb4d7437bd4e09ab7cba58a43bd68eb310044",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nixos",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "e5-backbone": "e5-backbone",
+        "e5-head-weights": "e5-head-weights",
+        "e5-tokenizer": "e5-tokenizer",
+        "e5-tokenizer-config": "e5-tokenizer-config",
+        "fasttext-model": "fasttext-model",
+        "flake-utils": "flake-utils",
+        "nixpkgs": "nixpkgs"
+      }
+    },
+    "systems": {
+      "locked": {
+        "lastModified": 1681028828,
+        "narHash": "sha256-Vy1rq5AaRuLzOxct8nz4T6wlgyUR7zLU309k9mBC768=",
+        "owner": "nix-systems",
+        "repo": "default",
+        "rev": "da67096a3b9bf56a91d16901293e51ba5b49a27e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-systems",
+        "repo": "default",
+        "type": "github"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}
