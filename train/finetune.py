@@ -8,16 +8,16 @@ import os
 import time
 
 import torch
-from dataset import extract_dataset
 from sklearn.metrics import classification_report, roc_auc_score
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 from transformers import AutoModel, AutoTokenizer, get_cosine_schedule_with_warmup
 
-from bitmagnet_classify.nsfw import sanitize_title_for_model
+from train.dataset import extract_clean_dataset
+from train.preprocess import sanitize_title_for_model
 
 MODEL_ID = "intfloat/multilingual-e5-small"
-OUTPUT_DIR = "scratch/e5_nsfw_finetuned"
+OUTPUT_DIR = "scratch/e5_nsfw_source"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 BATCH_SIZE = 64
 EPOCHS = 3
@@ -84,7 +84,7 @@ def train_and_evaluate():
     )
 
     print("1. Loading dataset...")
-    train_data, test_data = extract_dataset(num_positives=5000, num_negatives=5000)
+    train_data, test_data = extract_clean_dataset(num_positives=40000, num_negatives=80000)
     train_texts = [sanitize_title_for_model(t) for t, _ in train_data]
     train_labels = [y for _, y in train_data]
     test_texts = [sanitize_title_for_model(t) for t, _ in test_data]

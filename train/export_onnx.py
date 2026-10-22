@@ -1,21 +1,31 @@
-"""Export fine-tuned E5 NSFW classifier to standalone ONNX and quantize to dynamic INT8.
+"""Export the fine-tuned E5 NSFW classifier and its encoder to FP32 ONNX.
 
-Creates a single model.onnx and model_int8.onnx taking input_ids and attention_mask
-and returning nsfw_probability directly.
+Creates model.onnx (full classifier) and backbone.onnx (encoder only) taking
+input_ids and attention_mask.
 """
 
 import os
+import shutil
 
 import onnxruntime as ort
 import torch
-from finetune import MODEL_ID, OUTPUT_DIR, E5Classifier
-from onnxruntime.quantization import QuantType, quantize_dynamic
 from torch import nn
 from transformers import AutoTokenizer
 
-ONNX_DIR = "scratch/e5_nsfw_finetuned"
-ONNX_FP32 = os.path.join(ONNX_DIR, "model.onnx")
-ONNX_INT8 = os.path.join(ONNX_DIR, "model_int8.onnx")
+from train.finetune import MODEL_ID, OUTPUT_DIR, E5Classifier
+
+MODEL_DIR = "scratch/e5_nsfw_finetuned"
+ONNX_FP32 = os.path.join(OUTPUT_DIR, "model.onnx")
+ONNX_BACKBONE = os.path.join(MODEL_DIR, "backbone.onnx")
+
+
+class BackboneWrapper(nn.Module):
+    def __init__(self, encoder):
+        super().__init__()
+        self.encoder = encoder
+
+    def forward(self, input_ids, attention_mask):
+        return self.encoder(input_ids=input_ids, attention_mask=attention_mask)[0]
 
 
 class FullClassifierWrapper(nn.Module):
@@ -38,7 +48,7 @@ class FullClassifierWrapper(nn.Module):
         return torch.sigmoid(logits)
 
 
-def export_and_quantize():
+def export_fp32():
     print("1. Loading fine-tuned PyTorch checkpoint...")
     model = E5Classifier(MODEL_ID)
     model.load_state_dict(
@@ -51,6 +61,7 @@ def export_and_quantize():
 
     tokenizer = AutoTokenizer.from_pretrained(OUTPUT_DIR)
     dummy = tokenizer("query: test title", return_tensors="pt")
+    os.makedirs(MODEL_DIR, exist_ok=True)
 
     print(f"2. Exporting to {ONNX_FP32}...")
     torch.onnx.export(
@@ -65,21 +76,36 @@ def export_and_quantize():
             "nsfw_prob": {0: "batch_size"},
         },
         opset_version=17,
+        external_data=True,
     )
 
-    print(f"3. Quantizing to {ONNX_INT8}...")
-    quantize_dynamic(
-        model_input=ONNX_FP32,
-        model_output=ONNX_INT8,
-        weight_type=QuantType.QInt8,
+    print(f"3. Exporting encoder to {ONNX_BACKBONE}...")
+    backbone = BackboneWrapper(model.encoder)
+    backbone.eval()
+    torch.onnx.export(
+        backbone,
+        (dummy["input_ids"], dummy["attention_mask"]),
+        ONNX_BACKBONE,
+        input_names=["input_ids", "attention_mask"],
+        output_names=["last_hidden_state"],
+        dynamic_axes={
+            "input_ids": {0: "batch_size", 1: "seq_len"},
+            "attention_mask": {0: "batch_size", 1: "seq_len"},
+            "last_hidden_state": {0: "batch_size", 1: "seq_len"},
+        },
+        opset_version=17,
+        external_data=True,
     )
+
+    for name in ("tokenizer.json", "tokenizer_config.json"):
+        shutil.copy2(os.path.join(OUTPUT_DIR, name), os.path.join(MODEL_DIR, name))
 
     fp32_mb = os.path.getsize(ONNX_FP32) / (1024 * 1024)
-    int8_mb = os.path.getsize(ONNX_INT8) / (1024 * 1024)
-    print(f"Size: FP32 = {fp32_mb:.1f} MB -> INT8 = {int8_mb:.1f} MB")
+    backbone_mb = os.path.getsize(ONNX_BACKBONE) / (1024 * 1024)
+    print(f"Size: classifier = {fp32_mb:.1f} MB, backbone = {backbone_mb:.1f} MB")
 
-    print("\n4. Verifying ONNX INT8 with ONNXRuntime...")
-    sess = ort.InferenceSession(ONNX_INT8, providers=["CPUExecutionProvider"])
+    print("\n4. Verifying ONNX FP32 with ONNXRuntime...")
+    sess = ort.InferenceSession(ONNX_FP32, providers=["CPUExecutionProvider"])
 
     test_queries = [
         ("query: Brazzers Exxtra 1080p XXX", True),
@@ -105,4 +131,4 @@ def export_and_quantize():
 
 
 if __name__ == "__main__":
-    export_and_quantize()
+    export_fp32()

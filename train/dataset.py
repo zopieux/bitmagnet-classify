@@ -1,12 +1,12 @@
 """Clean dataset preparation for Western/English NSFW classification.
 
-Refined rules using all 207k exported torrents with file paths and extensions:
+Refined rules using all exported torrents with file paths and extensions:
 1. Exclude non-Western titles and non-Western file paths from Western training data
    (since non-Western scripts are handled deterministically by the language filter).
 2. Use file paths & extensions:
-   - Positive mining: adult keywords in name OR file paths, adult extensions/tags.
-   - Negative mining: clean documents (.epub, .pdf, .mobi), clean audio (.flac, .mp3, .alac),
-     software (.exe, .dll, .iso), clean movies/series with no adult terms in either name or file paths.
+   - Positive mining: adult keywords and known studios/codes in the torrent name.
+   - Negative mining: clean documents, audio, software, and movies/series with no adult terms
+     in either name or file paths.
 """
 
 import csv
@@ -14,11 +14,7 @@ import random
 import re
 from pathlib import Path
 
-from bitmagnet_classify.langid import _is_cyrillic, _is_han, _is_hangul, _is_kana
-from bitmagnet_classify.nsfw import (
-    is_keyword_nsfw,
-    is_mainstream_allowed,
-)
+from train.preprocess import is_keyword_nsfw, is_mainstream_allowed, is_non_western
 
 # Explicit hard negatives (titles containing provocative words that are clean media)
 HARD_NEGATIVES = [
@@ -56,7 +52,6 @@ HARD_NEGATIVES = [
     "VID_20200704_120150.mp4",
     "Roadside Research.24864017",
     "YP-EPUB-COMIC55.epub",
-    "MIZD-553",
     "Reacher S02E04 1080p rus LostFilm TV mkv",
     "The Little Book of Common Sense Investing",
     "Project X (2012) Oliver Cooper 1080p H264 AC 3",
@@ -177,22 +172,13 @@ _ADULT_LEAKAGE = re.compile(
 _JAV_CODE = re.compile(r"\b[A-Za-z]{3,5}-\d{2,4}\b")
 
 
-def is_non_western(text: str) -> bool:
-    """Check if text contains non-Western scripts (Kana, Han, Hangul, Cyrillic)."""
-    for ch in text:
-        c = ord(ch)
-        if _is_kana(c) or _is_han(c) or _is_hangul(c) or _is_cyrillic(c):
-            return True
-    return False
-
-
 def extract_clean_dataset(
     csv_path: str = "scratch/titles_with_files.csv",
-    num_positives: int = 15000,
-    num_negatives: int = 15000,
+    num_positives: int = 40000,
+    num_negatives: int = 80000,
     seed: int = 42,
 ) -> tuple[list[tuple[str, int]], list[tuple[str, int]]]:
-    """Sample high-confidence positive and diverse clean negative Western torrent titles.
+    """Sample all high-confidence positive and diverse clean negative Western torrent titles.
 
     Reads from titles_with_files.csv with columns: (name, sample_paths, extensions).
     """
@@ -221,21 +207,21 @@ def extract_clean_dataset(
             if is_non_western(title) or is_non_western(sample_paths):
                 continue
 
-            # Check positive (true adult release in title or sample files)
-            has_adult_signal = (
-                is_keyword_nsfw(title)
-                or is_keyword_nsfw(sample_paths)
+            has_adult_title = is_keyword_nsfw(title)
+            has_adult_paths = (
+                is_keyword_nsfw(sample_paths)
                 or bool(_ADULT_LEAKAGE.search(sample_paths))
+                or bool(_JAV_CODE.search(sample_paths))
             )
 
-            if has_adult_signal and not is_mainstream_allowed(title):
+            if has_adult_title and not is_mainstream_allowed(title):
                 if len(positives) < num_positives * 2:
                     positives.append((title, 1))
             elif (
-                not is_keyword_nsfw(title)
+                not has_adult_title
+                and not has_adult_paths
                 and not _ADULT_LEAKAGE.search(title)
                 and not _JAV_CODE.search(title)
-                and not _ADULT_LEAKAGE.search(sample_paths)
                 and len(negatives) < num_negatives * 2
             ):
                 negatives.append((title, 0))

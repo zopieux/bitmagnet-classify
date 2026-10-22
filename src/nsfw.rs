@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use ndarray::{Array1, Array2};
 use ndarray_npy::NpzReader;
+use ort::ep::{CUDA, ExecutionProvider};
 use ort::session::Session;
 use ort::value::Tensor;
 use parking_lot::Mutex;
@@ -9,10 +10,19 @@ use std::fs::File;
 use std::path::Path;
 use std::sync::LazyLock;
 use tokenizers::TruncationParams;
+use tracing::info;
 
 use crate::text;
 
 pub const DEFAULT_THRESHOLD: f32 = 0.70;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
+pub enum NsfwDevice {
+    #[default]
+    Auto,
+    Cpu,
+    Cuda,
+}
 
 pub const MAINSTREAM_ALLOWLIST: &[&str] = &[
     r"sex\s+(?:and\s+the\s+city|education|life|lives\s+of\s+college\s+girls|pistols)",
@@ -41,6 +51,9 @@ pub const KEYWORDS_XXX: &[&str] = &[
     r"bang(?:bros|ing)",
     r"bdsm",
     r"belami",
+    r"blacked(?:raw)?",
+    r"brattysis",
+    r"busty",
     r"blowjobs?",
     r"bondage",
     r"boob\w*",
@@ -51,6 +64,7 @@ pub const KEYWORDS_XXX: &[&str] = &[
     r"creampie",
     r"crossdress\w*",
     r"cuck\w*",
+    r"deeper",
     r"cum\w*",
     r"deepthroat",
     r"dicks?",
@@ -63,18 +77,24 @@ pub const KEYWORDS_XXX: &[&str] = &[
     r"fansly\w*",
     r"fc2",
     r"femboy",
+    r"familystrokes",
+    r"fantia",
     r"fetish",
+    r"fakehub",
     r"footjob",
     r"fuck\w*",
     r"gangbang",
     r"gloryhole\w*",
     r"handjob",
     r"hardcore",
+    r"hegre",
     r"hentai",
+    r"horny",
     r"heyzo",
     r"incest",
     r"interracial",
     r"jav",
+    r"javhd",
     r"jizz\w*",
     r"just[\s_-]?for[\s_-]?fans?",
     r"kink\w*",
@@ -83,8 +103,10 @@ pub const KEYWORDS_XXX: &[&str] = &[
     r"lesbian[sx]?",
     r"lewd\w*",
     r"masturbat\w*",
-    r"mature4k",
     r"manyvids",
+    r"mature4k",
+    r"mofos",
+    r"momcomesfirst",
     r"milf\w*",
     r"naughtyamerica",
     r"netorare",
@@ -92,6 +114,7 @@ pub const KEYWORDS_XXX: &[&str] = &[
     r"only[\s_-]?fans?",
     r"orgasm\w*",
     r"orgy",
+    r"passionhd",
     r"panties",
     r"panty",
     r"pegging",
@@ -100,11 +123,16 @@ pub const KEYWORDS_XXX: &[&str] = &[
     r"realjamvr",
     r"porn\w*",
     r"pov",
+    r"propertys?ex",
+    r"prostitut\w*",
+    r"puretaboo",
     r"pussy",
     r"realitykings",
     r"seduc\w*",
+    r"sexart",
     r"sex\w*",
     r"shemale",
+    r"sislovesme",
     r"sissy",
     r"slut\w*",
     r"squirt\w*",
@@ -122,10 +150,11 @@ pub const KEYWORDS_XXX: &[&str] = &[
     r"tonguejob",
     r"topless",
     r"tokyo[\s_-]?hot",
-    r"tushy",
+    r"tushy(?:raw)?",
     r"transsexual",
     r"twistys",
     r"vibrator",
+    r"vixen",
     r"wank\w*",
     r"x[-\s_]?art",
     r"xxx",
@@ -166,6 +195,33 @@ pub const KEYWORDS_SUBSTRING: &[&str] = &[
     r"肉棒",
     r"假阳具",
     r"淫",
+    r"エッチ",
+    r"えっち",
+    r"濡れ",
+    r"痴女",
+    r"催眠",
+    r"調教",
+    r"陵辱",
+    r"搾乳",
+    r"放尿",
+    r"寝取",
+    r"NTR",
+    r"パイズリ",
+    r"手コキ",
+    r"足コキ",
+    r"アナル",
+    r"精液",
+    r"ザーメン",
+    r"顔射",
+    r"売春",
+    r"ソープ",
+    r"デリヘル",
+    r"パパ活",
+    r"援交",
+    r"盗撮",
+    r"隠撮",
+    r"着エロ",
+    r"ヌード",
     r"风骚",
     r"骚货",
     r"约炮",
@@ -364,13 +420,22 @@ pub struct NsfwModel {
 }
 
 impl NsfwModel {
-    pub fn load(model_dir: &Path, dylib_path: Option<&str>, intra_threads: usize) -> Result<Self> {
-        let onnx_path = model_dir.join("backbone_int8.onnx");
+    pub fn load(
+        model_dir: &Path,
+        dylib_path: Option<&str>,
+        intra_threads: usize,
+        device: NsfwDevice,
+        device_id: i32,
+    ) -> Result<Self> {
+        let onnx_path = model_dir.join("backbone.onnx");
         let weights_path = model_dir.join("head_weights.npz");
         let tokenizer_path = model_dir.join("tokenizer.json");
 
         if !onnx_path.is_file() {
-            anyhow::bail!("Missing ONNX model at {:?}", onnx_path);
+            anyhow::bail!(
+                "Missing FP32 ONNX backbone at {:?}; quantized backbones are not supported",
+                onnx_path
+            );
         }
         if !weights_path.is_file() {
             anyhow::bail!("Missing head weights at {:?}", weights_path);
@@ -392,10 +457,48 @@ impl NsfwModel {
                 .context("Failed to build default ORT environment")?,
         };
 
-        let session = Session::builder(&env)
+        let cuda_available = CUDA::is_available().unwrap_or(false);
+        let (device_name, provider) = match device {
+            NsfwDevice::Cpu => ("CPU", None),
+            NsfwDevice::Cuda => {
+                if !cuda_available {
+                    anyhow::bail!(
+                        "CUDAExecutionProvider is not available; use --nsfw-device cpu or provide a CUDA-enabled ONNX Runtime"
+                    );
+                }
+                (
+                    "CUDA",
+                    Some(
+                        CUDA::default()
+                            .with_device_id(device_id)
+                            .build()
+                            .error_on_failure(),
+                    ),
+                )
+            }
+            NsfwDevice::Auto if cuda_available => (
+                "CUDA",
+                Some(
+                    CUDA::default()
+                        .with_device_id(device_id)
+                        .build()
+                        .fail_silently(),
+                ),
+            ),
+            NsfwDevice::Auto => ("CPU", None),
+        };
+        info!("NSFW inference device: {device_name}");
+
+        let mut session_builder = Session::builder(&env)
             .map_err(|e| anyhow::anyhow!("{e}"))?
             .with_intra_threads(intra_threads)
-            .map_err(|e| anyhow::anyhow!("{e}"))?
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        if let Some(provider) = provider {
+            session_builder = session_builder
+                .with_execution_providers([provider])
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+        }
+        let session = session_builder
             .commit_from_file(&onnx_path)
             .map_err(|e| anyhow::anyhow!("{e}"))?;
 
@@ -464,7 +567,7 @@ impl NsfwModel {
         let (_shape, data) = outputs[0].try_extract_tensor::<f32>()?;
         let last_hidden = ndarray::ArrayView3::from_shape((1, seq_len, 384), data)?;
 
-        // Mean pooling + L2 normalization
+        // Mean pooling over the attention mask, without normalization.
         let mut sum_embeddings = Array1::<f32>::zeros(384);
         let mut sum_mask = 0.0f32;
         for (i, &m) in attention_mask_array.row(0).iter().enumerate() {
@@ -475,9 +578,7 @@ impl NsfwModel {
             }
         }
         let divisor = sum_mask.max(1e-9);
-        let mut pooled = sum_embeddings / divisor;
-        let norm = (pooled.dot(&pooled)).sqrt().max(1e-12);
-        pooled /= norm;
+        let pooled = sum_embeddings / divisor;
 
         // 2-layer MLP head: h = max(0, pooled @ W1.T + b1)
         let mut h = Array1::<f32>::zeros(128);

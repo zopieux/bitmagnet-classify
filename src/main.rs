@@ -15,7 +15,7 @@ use bitmagnet_classify::langid::LanguageDetector;
 use bitmagnet_classify::models::{
     self, DryRunClassificationItem, PatchClassificationItem, VerdictAction,
 };
-use bitmagnet_classify::nsfw::NsfwModel;
+use bitmagnet_classify::nsfw::{NsfwDevice, NsfwModel};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -116,6 +116,23 @@ struct Args {
 
     #[arg(
         long,
+        value_enum,
+        default_value = "auto",
+        env = "NSFW_DEVICE",
+        help = "NSFW inference device: auto, cpu, or cuda"
+    )]
+    nsfw_device: NsfwDevice,
+
+    #[arg(
+        long,
+        default_value_t = 0,
+        env = "NSFW_DEVICE_ID",
+        help = "CUDA device ID for NSFW inference"
+    )]
+    nsfw_device_id: i32,
+
+    #[arg(
+        long,
         env = "FASTTEXT_MODEL_PATH",
         help = "Path to FastText language model file"
     )]
@@ -213,10 +230,19 @@ async fn main() -> Result<()> {
         if !dir.exists() {
             anyhow::bail!("NSFW model directory does not exist: {:?}", dir);
         }
-        info!("NSFW model: enabled ({:?})", dir);
+        info!(
+            "NSFW model: enabled ({:?}, device: {:?})",
+            dir, args.nsfw_device
+        );
         Some(
-            NsfwModel::load(dir, args.ort_dylib_path.as_deref(), num_threads)
-                .context("Failed to load NSFW ONNX model")?,
+            NsfwModel::load(
+                dir,
+                args.ort_dylib_path.as_deref(),
+                num_threads,
+                args.nsfw_device,
+                args.nsfw_device_id,
+            )
+            .context("Failed to load NSFW ONNX model")?,
         )
     } else {
         info!("NSFW model: disabled (keyword filter only)");

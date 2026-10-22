@@ -19,8 +19,13 @@
       flake = false;
     };
     e5-backbone = {
-      # ~119 MB
-      url = "https://huggingface.co/zopieux/e5-small-torrent-nsfw/resolve/main/backbone_int8.onnx";
+      # ~449 MB
+      url = "https://huggingface.co/zopieux/e5-small-torrent-nsfw/resolve/main/backbone.onnx";
+      flake = false;
+    };
+    e5-backbone-data = {
+      # ~449 MB
+      url = "https://huggingface.co/zopieux/e5-small-torrent-nsfw/resolve/main/backbone.onnx.data";
       flake = false;
     };
     e5-tokenizer = {
@@ -44,6 +49,7 @@
       fasttext-model,
       e5-head-weights,
       e5-backbone,
+      e5-backbone-data,
       e5-tokenizer,
       e5-tokenizer-config,
       ...
@@ -71,8 +77,12 @@
             path = e5-head-weights;
           }
           {
-            name = "backbone_int8.onnx";
+            name = "backbone.onnx";
             path = e5-backbone;
+          }
+          {
+            name = "backbone.onnx.data";
+            path = e5-backbone-data;
           }
           {
             name = "tokenizer.json";
@@ -140,7 +150,11 @@
         };
 
         devShells.cuda = cudaPkgs.mkShell {
-          packages = with cudaPythonPackages; [
+          packages = [
+            devRustToolchain
+            cudaPkgs.pkg-config
+            cudaPkgs.onnxruntime
+          ] ++ (with cudaPythonPackages; [
             cudaPkgs.python314
             numpy
             torch
@@ -152,10 +166,12 @@
             onnxscript
             cudaPkgs.pyrefly
             cudaPkgs.ruff
-          ];
+          ]);
           FASTTEXT_MODEL_PATH = "${fasttext-model}";
           NSFW_ONNX_PATH = "${e5Model}";
           TRANSFORMERS_NO_ADVISORY_WARNINGS = "1";
+          ORT_DYLIB_PATH = "${cudaPkgs.onnxruntime}/lib/libonnxruntime.so";
+          NSFW_DEVICE = "auto";
         };
       }
     );
