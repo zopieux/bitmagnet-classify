@@ -37,7 +37,7 @@ pub fn is_cyrillic(c: u32) -> bool {
 static DIGITS_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\d+").expect("Valid digits regex"));
 
 pub enum LangBackend {
-    FastText(fasttext_pure_rs::FastText),
+    FastText(Box<fasttext_pure_rs::FastText>),
     WhatLang,
 }
 
@@ -55,7 +55,7 @@ impl LanguageDetector {
             .map_err(|e| anyhow::anyhow!("Failed to load fastText model from {:?}: {e}", path))?;
         info!("Loaded pure-Rust fastText language model from {:?}", path);
         Ok(Self {
-            backend: LangBackend::FastText(model),
+            backend: LangBackend::FastText(Box::new(model)),
             threshold,
         })
     }
@@ -112,19 +112,15 @@ impl LanguageDetector {
 
         match &self.backend {
             LangBackend::FastText(model) => {
-                if let Ok(predictions) = model.predict(&sanitized, 1, 0.0) {
-                    if let Some(pred) = predictions.first() {
-                        if pred.probability >= self.threshold {
-                            return pred.label.trim_start_matches("__label__").to_string();
-                        }
-                    }
+                if let Ok(predictions) = model.predict(&sanitized, 1, 0.0)
+                    && let Some(pred) = predictions.first().filter(|p| p.probability >= self.threshold)
+                {
+                    return pred.label.trim_start_matches("__label__").to_string();
                 }
             }
             LangBackend::WhatLang => {
-                if let Some(info) = whatlang::detect(&sanitized) {
-                    if info.confidence() >= (self.threshold as f64) {
-                        return info.lang().code().to_string();
-                    }
+                if let Some(info) = whatlang::detect(&sanitized).filter(|i| i.confidence() >= (self.threshold as f64)) {
+                    return info.lang().code().to_string();
                 }
             }
         }

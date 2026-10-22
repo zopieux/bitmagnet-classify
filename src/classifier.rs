@@ -43,8 +43,12 @@ impl Classifier {
         &self,
         payload: &TorrentPayload,
         early_lang_override: Option<&[String]>,
+        classified_tag: Option<&str>,
     ) -> Result<ClassificationVerdict> {
-        let mut tags: Vec<String> = vec!["external".to_string()];
+        let mut tags: Vec<String> = Vec::new();
+        if let Some(tag) = classified_tag.filter(|s| !s.is_empty()) {
+            tags.push(tag.to_string());
+        }
 
         let skip_langs: HashSet<&str> = if let Some(override_langs) = early_lang_override {
             override_langs.iter().map(|s| s.as_str()).collect()
@@ -97,6 +101,7 @@ impl Classifier {
                 return Ok(ClassificationVerdict {
                     action: VerdictAction::Keep,
                     tags,
+                    content_type: Some("xxx".to_string()),
                     ..Default::default()
                 });
             }
@@ -108,6 +113,7 @@ impl Classifier {
                     return Ok(ClassificationVerdict {
                         action: VerdictAction::Keep,
                         tags,
+                        content_type: Some("xxx".to_string()),
                         ..Default::default()
                     });
                 }
@@ -145,6 +151,7 @@ impl Classifier {
         }
 
         // 5. Fallback to ML sequence classifier if model is loaded
+        let mut is_nsfw_final = false;
         if let Some(ref model) = self.nsfw_model {
             let (mut is_nsfw, prob) = model.is_model_nsfw(&payload.name, DEFAULT_THRESHOLD)?;
 
@@ -152,10 +159,11 @@ impl Classifier {
             if (BORDERLINE_LOW..=BORDERLINE_HIGH).contains(&prob) && !payload.files.is_empty() {
                 let mut file_scores: Vec<f32> = Vec::new();
                 for f in payload.files.iter().take(3) {
-                    if let Some(ext) = &f.extension {
-                        if SAFE_AUX_EXTENSIONS.contains(&ext.to_lowercase().as_str()) {
-                            continue;
-                        }
+                    if f.extension
+                        .as_ref()
+                        .is_some_and(|ext| SAFE_AUX_EXTENSIONS.contains(&ext.to_lowercase().as_str()))
+                    {
+                        continue;
                     }
                     let (_, f_prob) = model.is_model_nsfw(&f.path, DEFAULT_THRESHOLD)?;
                     file_scores.push(f_prob);
@@ -168,6 +176,7 @@ impl Classifier {
                         return Ok(ClassificationVerdict {
                             action: VerdictAction::Keep,
                             tags,
+                            content_type: Some("xxx".to_string()),
                             ..Default::default()
                         });
                     } else if max_file_score < 0.35 {
@@ -178,12 +187,18 @@ impl Classifier {
 
             if is_nsfw {
                 tags.push("nsfw-model".to_string());
+                is_nsfw_final = true;
             }
         }
 
         Ok(ClassificationVerdict {
             action: VerdictAction::Keep,
             tags,
+            content_type: if is_nsfw_final {
+                Some("xxx".to_string())
+            } else {
+                None
+            },
             ..Default::default()
         })
     }

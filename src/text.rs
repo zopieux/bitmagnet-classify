@@ -28,7 +28,7 @@ pub fn sanitize_title_for_model(text: &str) -> String {
     let cleaned = CLEAN_BRACKETS_PATTERN.replace_all(&cleaned, " ");
     let cleaned = CLEAN_PARENS_PATTERN.replace_all(&cleaned, " ");
     let cleaned = CLEAN_SCENE_TAGS_PATTERN.replace_all(&cleaned, " ");
-    let cleaned = cleaned.replace('.', " ").replace('_', " ").replace('-', " ");
+    let cleaned = cleaned.replace(['.', '_', '-'], " ");
     cleaned.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
