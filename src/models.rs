@@ -107,9 +107,10 @@ pub struct ApiClassificationItem {
 impl ApiClassificationItem {
     pub fn to_payload(&self) -> TorrentPayload {
         if let Some(ref t) = self.torrent {
-            let extension = t.extension.clone().or_else(|| {
-                t.name.rsplit_once('.').map(|(_, ext)| ext.to_lowercase())
-            });
+            let extension = t
+                .extension
+                .clone()
+                .or_else(|| t.name.rsplit_once('.').map(|(_, ext)| ext.to_lowercase()));
             let hint = t.hint.clone().or_else(|| {
                 self.content_type.as_ref().map(|ct| TorrentHint {
                     content_type: Some(ct.clone()),
@@ -154,6 +155,47 @@ pub struct PatchClassificationItem {
     pub tags: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DryRunClassificationItem {
+    pub info_hash: String,
+    pub name: String,
+    pub size: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extension: Option<String>,
+    pub file_count: usize,
+    pub files: Vec<String>,
+    pub action: String,
+    pub tags: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_type: Option<String>,
+}
+
+impl DryRunClassificationItem {
+    pub fn from_api_item(item: &ApiClassificationItem, patch: &PatchClassificationItem) -> Self {
+        let payload = item.to_payload();
+        let file_count = payload.files.len();
+        let files = payload
+            .files
+            .iter()
+            .take(3)
+            .map(|f| f.path.clone())
+            .collect();
+
+        Self {
+            info_hash: patch.info_hash.clone(),
+            name: payload.name,
+            size: payload.size,
+            extension: payload.extension,
+            file_count,
+            files,
+            action: patch.action.clone(),
+            tags: patch.tags.clone(),
+            content_type: patch.content_type.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

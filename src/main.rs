@@ -1,7 +1,7 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -9,11 +9,11 @@ use clap::Parser;
 use rayon::prelude::*;
 use tracing::info;
 
-use bitmagnet_classify::classifier::Classifier;
+use bitmagnet_classify::classifier::{Classifier, EarlyLangAction};
 use bitmagnet_classify::client::BitmagnetClient;
 use bitmagnet_classify::langid::LanguageDetector;
 use bitmagnet_classify::models::{
-    is_valid_tag_name, PatchClassificationItem, VerdictAction,
+    self, DryRunClassificationItem, PatchClassificationItem, VerdictAction,
 };
 use bitmagnet_classify::nsfw::NsfwModel;
 
@@ -51,16 +51,36 @@ struct Args {
     )]
     reprocess_all: bool,
 
-    #[arg(long, default_value_t = 50, env = "BATCH_SIZE", help = "Batch size for reading and writing torrents")]
+    #[arg(
+        long,
+        default_value_t = 50,
+        env = "BATCH_SIZE",
+        help = "Batch size for reading and writing torrents"
+    )]
     batch_size: usize,
 
-    #[arg(long, default_value_t = 1000, env = "RATE", help = "Maximum processing rate in torrents per second")]
+    #[arg(
+        long,
+        default_value_t = 1000,
+        env = "RATE",
+        help = "Maximum processing rate in torrents per second"
+    )]
     rate: u32,
 
-    #[arg(short, long, env = "THREADS", help = "Number of worker threads for parallel classification")]
+    #[arg(
+        short,
+        long,
+        env = "THREADS",
+        help = "Number of worker threads for parallel classification"
+    )]
     threads: Option<usize>,
 
-    #[arg(short, long, env = "LIMIT", help = "Maximum number of torrents to process in total")]
+    #[arg(
+        short,
+        long,
+        env = "LIMIT",
+        help = "Maximum number of torrents to process in total"
+    )]
     limit: Option<usize>,
 
     #[arg(
@@ -78,13 +98,34 @@ struct Args {
     )]
     early_lang: Vec<String>,
 
-    #[arg(long, env = "NSFW_ONNX_PATH", help = "Path to NSFW ONNX model directory")]
+    #[arg(
+        long = "early",
+        value_enum,
+        default_value = "skips-nsfw",
+        env = "EARLY",
+        help = "Action for torrents matching --early-lang: delete, skips-nsfw, or post-nsfw"
+    )]
+    early_lang_action: EarlyLangAction,
+
+    #[arg(
+        long,
+        env = "NSFW_ONNX_PATH",
+        help = "Path to NSFW ONNX model directory"
+    )]
     model_dir: Option<PathBuf>,
 
-    #[arg(long, env = "FASTTEXT_MODEL_PATH", help = "Path to FastText language model file")]
+    #[arg(
+        long,
+        env = "FASTTEXT_MODEL_PATH",
+        help = "Path to FastText language model file"
+    )]
     fasttext_model_path: Option<PathBuf>,
 
-    #[arg(long, env = "ORT_DYLIB_PATH", help = "Path to ONNX Runtime shared library")]
+    #[arg(
+        long,
+        env = "ORT_DYLIB_PATH",
+        help = "Path to ONNX Runtime shared library"
+    )]
     ort_dylib_path: Option<String>,
 
     #[arg(long, default_value_t = 50, help = "Max files per torrent to evaluate")]
@@ -108,6 +149,7 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
@@ -116,7 +158,7 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
 
-    if !is_valid_tag_name(&args.tag) {
+    if !models::is_valid_tag_name(&args.tag) {
         anyhow::bail!(
             "Invalid tag {:?}: must be lowercase alphanumeric with optional hyphens (matching '^[a-z0-9]+(-[a-z0-9]+)*$')",
             args.tag
@@ -132,9 +174,11 @@ async fn main() -> Result<()> {
     let client = BitmagnetClient::new(&args.endpoint, args.user.as_deref())
         .with_context(|| format!("Failed to initialize client for endpoint {}", args.endpoint))?;
 
-    let num_threads = args
-        .threads
-        .unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4));
+    let num_threads = args.threads.unwrap_or_else(|| {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+    });
 
     info!("Bitmagnet endpoint: {}", client.endpoint());
     if client.has_auth() {
@@ -144,7 +188,10 @@ async fn main() -> Result<()> {
     info!("Batch size: {}", args.batch_size);
     info!("Max rate: {} items/s", args.rate);
     match exclude_tag {
-        Some(tag) => info!("Tag indicator: {:?} (exclude_tag on GET, added on PATCH)", tag),
+        Some(tag) => info!(
+            "Tag indicator: {:?} (exclude_tag on GET, added on PATCH)",
+            tag
+        ),
         None => info!("Mode: reprocess all torrents"),
     }
     if let Some(ref qt) = args.query_tag {
@@ -153,6 +200,7 @@ async fn main() -> Result<()> {
     if let Some(limit) = args.limit {
         info!("Limit: {} torrents", limit);
     }
+    info!("Early language action: {:?}", args.early_lang_action);
     if let Some(interval) = args.poll_interval {
         info!("Watch mode enabled: poll interval {}s", interval);
     }
@@ -204,6 +252,7 @@ async fn main() -> Result<()> {
         lang_detector,
         nsfw_model,
         early_lang_set,
+        args.early_lang_action,
     ));
 
     let pool = rayon::ThreadPoolBuilder::new()
@@ -317,10 +366,17 @@ async fn main() -> Result<()> {
                 .collect()
         });
 
-        // 3. Send updates back to API (or print formatted JSON to stdout if dry-run)
+        // 3. Send updates back to API (or print formatted review JSON to stdout if dry-run)
         let updated_count = if args.dry_run {
-            let formatted = serde_json::to_string_pretty(&patch_items)
-                .context("Failed to format patch items as JSON")?;
+            let review: Vec<DryRunClassificationItem> = items
+                .iter()
+                .zip(&patch_items)
+                .map(|(item, patch)| DryRunClassificationItem::from_api_item(item, patch))
+                .collect();
+
+            print_dry_run_summary(&review);
+            let formatted = serde_json::to_string_pretty(&review)
+                .context("Failed to format dry-run review as JSON")?;
             println!("{formatted}");
             batch_count
         } else {
@@ -372,4 +428,34 @@ async fn main() -> Result<()> {
     );
 
     Ok(())
+}
+
+fn print_dry_run_summary(items: &[DryRunClassificationItem]) {
+    let mut groups: BTreeMap<String, usize> = BTreeMap::new();
+    for item in items {
+        let mut result_tags: Vec<&str> = item
+            .tags
+            .iter()
+            .map(String::as_str)
+            .filter(|tag| *tag != "ok")
+            .collect();
+        result_tags.sort_unstable();
+
+        let key = if item.action == "delete" {
+            "delete".to_string()
+        } else if result_tags.is_empty() {
+            "unclassified".to_string()
+        } else {
+            result_tags.join(",")
+        };
+        *groups.entry(key).or_default() += 1;
+    }
+
+    let mut groups: Vec<(String, usize)> = groups.into_iter().collect();
+    groups.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+    eprintln!("Dry-run results ({} items):", items.len());
+    for (group, count) in groups {
+        eprintln!("  {count:>4}  {group}");
+    }
 }

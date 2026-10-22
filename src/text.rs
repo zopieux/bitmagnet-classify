@@ -1,18 +1,18 @@
-use std::sync::LazyLock;
 use regex::Regex;
+use std::sync::LazyLock;
 
 static CLEAN_EXT_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\.(?:mp4|mkv|avi|wmv|mov|flv|iso|zip|rar|tar|gz|7z|epub|pdf|cbz|cbr|txt|nfo|sfv)$")
-        .expect("Valid ext regex")
+    Regex::new(
+        r"(?i)\.(?:mp4|mkv|avi|wmv|mov|flv|iso|zip|rar|tar|gz|7z|epub|pdf|cbz|cbr|txt|nfo|sfv)$",
+    )
+    .expect("Valid ext regex")
 });
 
-static CLEAN_BRACKETS_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\[[^\]]*\]|\{[^\}]*\}").expect("Valid brackets regex")
-});
+static CLEAN_BRACKETS_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\[[^\]]*\]|\{[^\}]*\}").expect("Valid brackets regex"));
 
 static CLEAN_PARENS_PATTERN: LazyLock<fancy_regex::Regex> = LazyLock::new(|| {
-    fancy_regex::Regex::new(r"\((?!\b(?:19\d\d|20[0-2]\d)\b)[^\)]*\)")
-        .expect("Valid parens regex")
+    fancy_regex::Regex::new(r"\((?!\b(?:19\d\d|20[0-2]\d)\b)[^\)]*\)").expect("Valid parens regex")
 });
 
 static CLEAN_SCENE_TAGS_PATTERN: LazyLock<Regex> = LazyLock::new(|| {

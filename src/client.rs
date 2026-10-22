@@ -1,6 +1,6 @@
-use std::time::Duration;
 use anyhow::{Context, Result};
 use reqwest::Client;
+use std::time::Duration;
 
 use crate::models::{
     ApiClassificationItem, ApiGetBatchResponse, ApiPatchBatchResponse, PatchClassificationItem,
@@ -137,7 +137,12 @@ impl BitmagnetClient {
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("PATCH {} returned status {}: {}", self.endpoint, status, body);
+            anyhow::bail!(
+                "PATCH {} returned status {}: {}",
+                self.endpoint,
+                status,
+                body
+            );
         }
 
         let res: ApiPatchBatchResponse = resp

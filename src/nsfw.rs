@@ -1,6 +1,3 @@
-use std::fs::File;
-use std::path::Path;
-use std::sync::LazyLock;
 use anyhow::{Context, Result};
 use ndarray::{Array1, Array2};
 use ndarray_npy::NpzReader;
@@ -8,9 +5,12 @@ use ort::session::Session;
 use ort::value::Tensor;
 use parking_lot::Mutex;
 use regex::Regex;
+use std::fs::File;
+use std::path::Path;
+use std::sync::LazyLock;
 use tokenizers::TruncationParams;
 
-use crate::text::sanitize_title_for_model;
+use crate::text;
 
 pub const DEFAULT_THRESHOLD: f32 = 0.70;
 
@@ -32,20 +32,21 @@ static MAINSTREAM_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(&pattern).expect("Valid mainstream pattern")
 });
 
-static NON_WORD_SEP_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"[\W_]+").expect("Valid non-word separator pattern")
-});
+static NON_WORD_SEP_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[\W_]+").expect("Valid non-word separator pattern"));
 
 pub const KEYWORDS_XXX: &[&str] = &[
     r"anal",
     r"ass(?:es)?",
-    r"bangbros",
+    r"bang(?:bros|ing)",
     r"bdsm",
+    r"belami",
     r"blowjobs?",
     r"bondage",
     r"boob\w*",
     r"brazzers",
     r"caribbeancom",
+    r"chaturbate",
     r"cocks?",
     r"creampie",
     r"crossdress\w*",
@@ -55,6 +56,7 @@ pub const KEYWORDS_XXX: &[&str] = &[
     r"dicks?",
     r"digitaldesire",
     r"dildo",
+    r"erito",
     r"erocomic",
     r"erotic\w*",
     r"evilangel",
@@ -81,6 +83,8 @@ pub const KEYWORDS_XXX: &[&str] = &[
     r"lesbian[sx]?",
     r"lewd\w*",
     r"masturbat\w*",
+    r"mature4k",
+    r"manyvids",
     r"milf\w*",
     r"naughtyamerica",
     r"netorare",
@@ -93,10 +97,9 @@ pub const KEYWORDS_XXX: &[&str] = &[
     r"pegging",
     r"playboy",
     r"playmate",
+    r"realjamvr",
     r"porn\w*",
     r"pov",
-    r"pthc",
-    r"ptsc",
     r"pussy",
     r"realitykings",
     r"seduc\w*",
@@ -115,12 +118,16 @@ pub const KEYWORDS_XXX: &[&str] = &[
     r"teamskeet",
     r"threesome",
     r"tits?",
+    r"titties",
     r"tonguejob",
     r"topless",
+    r"tokyo[\s_-]?hot",
+    r"tushy",
     r"transsexual",
     r"twistys",
     r"vibrator",
     r"wank\w*",
+    r"x[-\s_]?art",
     r"xxx",
 ];
 
@@ -132,6 +139,202 @@ static TOKEN_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
 static WILDCARD_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)(?:fuck|gloryhole|porn|wank|xxx)").expect("Valid wildcard pattern")
 });
+
+pub const KEYWORDS_SUBSTRING: &[&str] = &[
+    r"色情",
+    r"情色",
+    r"成人视频",
+    r"成人影片",
+    r"成人片",
+    r"18禁",
+    r"女优",
+    r"女優",
+    r"无码",
+    r"無碼",
+    r"无修正",
+    r"無修正",
+    r"内射",
+    r"中出",
+    r"中出し",
+    r"口交",
+    r"肛交",
+    r"自慰",
+    r"潮喷",
+    r"潮吹",
+    r"潮吹き",
+    r"肉便器",
+    r"肉棒",
+    r"假阳具",
+    r"淫",
+    r"风骚",
+    r"骚货",
+    r"约炮",
+    r"约啪",
+    r"嫖娼",
+    r"乱伦",
+    r"迷奸",
+    r"强奸",
+    r"人妻",
+    r"巨乳",
+    r"爆乳",
+    r"美乳",
+    r"痴女",
+    r"熟女",
+    r"露出",
+    r"偷拍",
+    r"盗撮",
+    r"里番",
+    r"工口",
+    r"嫩模",
+    r"外围女",
+    r"楼凤",
+    r"风俗",
+    r"風俗",
+    r"ソープ",
+    r"フェラ",
+    r"セックス",
+    r"ヌード",
+    r"エロ",
+    r"官能",
+    r"乱交",
+    r"痴漢",
+    r"おっぱい",
+    r"絶頂",
+    r"アクメ",
+    r"オナニー",
+    r"性交",
+    r"性愛",
+    r"做爱",
+    r"性爱",
+    r"车震",
+    r"开房",
+    r"东热",
+    r"黑丝",
+    r"无套",
+    r"大奶",
+];
+
+static SUBSTRING_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    let pattern = format!(r"(?i)(?:{})", KEYWORDS_SUBSTRING.join("|"));
+    Regex::new(&pattern).expect("Valid NSFW substring pattern")
+});
+
+const JAV_LABEL_PREFIXES: &[&str] = &[
+    "abp", "ap", "bn", "carib", "cawd", "dvdms", "fc2", "fsdss", "fset", "gachinco", "gapl",
+    "heyzo", "hodv", "homa", "ipx", "ipz", "jav", "jul", "jux", "kaad", "luxu", "mbr", "miaa",
+    "miad", "mide", "midv", "mikr", "mium", "mmc", "nass", "nkd", "onsg", "pred", "rbd", "sdnm",
+    "snis", "sone", "snos", "ssis", "ssni", "start", "sun", "tek", "venu", "waaa",
+];
+
+const JAV_CODE_EXCLUDED_PREFIXES: &[&str] = &[
+    "aac",
+    "ac",
+    "amd",
+    "audi",
+    "avc",
+    "bd",
+    "benz",
+    "bmw",
+    "canon",
+    "cd",
+    "cpu",
+    "ddp",
+    "ddr",
+    "dts",
+    "dvd",
+    "fhd",
+    "ford",
+    "fuji",
+    "gpu",
+    "gtx",
+    "hdd",
+    "hd",
+    "hdr",
+    "hevc",
+    "honda",
+    "hyundai",
+    "intel",
+    "ios",
+    "iso",
+    "kia",
+    "mazda",
+    "mlb",
+    "mp",
+    "mpeg",
+    "nba",
+    "nfl",
+    "nhl",
+    "nissan",
+    "nvidia",
+    "nvme",
+    "olympus",
+    "os",
+    "panasonic",
+    "pci",
+    "psp",
+    "rar",
+    "rtx",
+    "rx",
+    "sata",
+    "sdr",
+    "sony",
+    "ssd",
+    "subaru",
+    "tesla",
+    "toyota",
+    "ts",
+    "ufc",
+    "uhd",
+    "usb",
+    "vga",
+    "vw",
+    "web",
+    "win",
+    "windows",
+    "wwe",
+    "xbox",
+    "zip",
+];
+
+const JAV_CODE_EXCLUDED_NUMBERS: &[&str] =
+    &["480", "540", "576", "720", "1080", "1440", "2160", "4320"];
+
+static JAV_CODE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)(?:^|[\W_])([a-z]{2,6})-(\d{3,6})(?:$|[\W_])").expect("Valid JAV code pattern")
+});
+
+static JAV_COMPACT_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)(?:^|[\W_])([a-z]{2,6})(\d{3,5})(?:$|[\W_])")
+        .expect("Valid compact JAV code pattern")
+});
+
+fn is_jav_code(text: &str) -> bool {
+    for captures in JAV_CODE_PATTERN.captures_iter(text) {
+        let prefix = captures[1].to_lowercase();
+        let number = &captures[2];
+        if JAV_CODE_EXCLUDED_PREFIXES.contains(&prefix.as_str())
+            || JAV_CODE_EXCLUDED_NUMBERS.contains(&number)
+        {
+            continue;
+        }
+        if number.len() == 4
+            && let Ok(year) = number.parse::<u32>()
+            && (1900..=2099).contains(&year)
+        {
+            continue;
+        }
+        return true;
+    }
+
+    for captures in JAV_COMPACT_PATTERN.captures_iter(text) {
+        let prefix = captures[1].to_lowercase();
+        if JAV_LABEL_PREFIXES.contains(&prefix.as_str()) {
+            return true;
+        }
+    }
+
+    false
+}
 
 pub fn is_mainstream_allowed(text: &str) -> bool {
     if text.is_empty() {
@@ -145,7 +348,10 @@ pub fn is_keyword_nsfw(text: &str) -> bool {
     if text.is_empty() || is_mainstream_allowed(text) {
         return false;
     }
-    TOKEN_PATTERN.is_match(text) || WILDCARD_PATTERN.is_match(text)
+    TOKEN_PATTERN.is_match(text)
+        || WILDCARD_PATTERN.is_match(text)
+        || SUBSTRING_PATTERN.is_match(text)
+        || is_jav_code(text)
 }
 
 pub struct NsfwModel {
@@ -224,7 +430,7 @@ impl NsfwModel {
             return Ok((false, 0.0));
         }
 
-        let sanitized = sanitize_title_for_model(text);
+        let sanitized = text::sanitize_title_for_model(text);
         if sanitized.is_empty() {
             return Ok((false, 0.0));
         }
@@ -305,5 +511,34 @@ impl NsfwModel {
             return Ok((true, "model"));
         }
         Ok((false, ""))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_adult_studios_and_codes() {
+        assert!(is_keyword_nsfw("Mature4k - Sweet Becky"));
+        assert!(is_keyword_nsfw("[Tushy] Kelly Collins"));
+        assert!(is_keyword_nsfw("RealJamVR-Yhivi-Strip-Show"));
+        assert!(is_keyword_nsfw("[BelAmi] Pillow Talk 3"));
+        assert!(is_keyword_nsfw("x-art_lia_black_&_white_1080"));
+        assert!(is_keyword_nsfw("Tokyo Hot nkd-064"));
+        assert!(is_keyword_nsfw("ABP-449.avi"));
+        assert!(is_keyword_nsfw("MIAD-923"));
+        assert!(is_keyword_nsfw("FSET299.avi"));
+        assert!(is_keyword_nsfw("风骚的家庭教师"));
+        assert!(is_keyword_nsfw("东热收藏之靓女"));
+    }
+
+    #[test]
+    fn ignores_technical_codes_and_years() {
+        assert!(!is_keyword_nsfw("Windows 11 24H2 + RTX-4090"));
+        assert!(!is_keyword_nsfw("The Big Short (2015) 1080p"));
+        assert!(!is_keyword_nsfw("histoires-du-cinema-jlg-1988"));
+        assert!(!is_keyword_nsfw("Something 2160p HEVC-10"));
+        assert!(!is_keyword_nsfw("Software build Eagle123"));
     }
 }

@@ -1,3 +1,4 @@
+pub mod banned;
 pub mod classifier;
 pub mod client;
 pub mod langid;
