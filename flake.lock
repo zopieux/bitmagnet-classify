@@ -3,7 +3,7 @@
     "e5-backbone": {
       "flake": false,
       "locked": {
-        "narHash": "sha256-dhNH0EPBWJOA2aqTZXoxEL8l9aeXpegrKKpUMtdwU9w=",
+        "narHash": "sha256-7YD7LmBcGDxjoimw3qnaONchZOfquRu7oIRaYTyvS6c=",
         "type": "file",
         "url": "https://huggingface.co/zopieux/e5-small-torrent-nsfw/resolve/main/backbone.onnx"
       },
@@ -15,7 +15,7 @@
     "e5-backbone-data": {
       "flake": false,
       "locked": {
-        "narHash": "sha256-8xbxvAoDfQ+O/MpYIKB+VRacmT8ggDS8NwwzT56YRNk=",
+        "narHash": "sha256-N13HkOr5aH53fuXyDq9bcJqmTwJiKKQEis7/slHmsrA=",
         "type": "file",
         "url": "https://huggingface.co/zopieux/e5-small-torrent-nsfw/resolve/main/backbone.onnx.data"
       },
@@ -27,7 +27,7 @@
     "e5-head-weights": {
       "flake": false,
       "locked": {
-        "narHash": "sha256-ouf6B0efCWiJLoLLECYr1Fyc6ptFISKy5YNjW+qDxog=",
+        "narHash": "sha256-4/l1EkLNtBWbJi7QcfMBaoGBu2rOxNOgCAcpo+glFb0=",
         "type": "file",
         "url": "https://huggingface.co/zopieux/e5-small-torrent-nsfw/resolve/main/head_weights.npz"
       },
@@ -39,7 +39,7 @@
     "e5-tokenizer": {
       "flake": false,
       "locked": {
-        "narHash": "sha256-XTTATo62TyJGEyX6D5Pb6hdWwSFIKP/ptS26Yast1f0=",
+        "narHash": "sha256-RSQdZvlWmBMTp4R+Z6kMKdV/s9B85mE1udeFD8rF5t4=",
         "type": "file",
         "url": "https://huggingface.co/zopieux/e5-small-torrent-nsfw/resolve/main/tokenizer.json"
       },
@@ -92,11 +92,11 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1791956154,
-        "narHash": "sha256-jBYGPi4udQ9uo4KQp9m2J0546nJVQitG15gvZSaVVAs=",
+        "lastModified": 1792502884,
+        "narHash": "sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA=",
         "owner": "nixos",
         "repo": "nixpkgs",
-        "rev": "55bfb4d7437bd4e09ab7cba58a43bd68eb310044",
+        "rev": "02c087f3fe673c9e317f206a627cb6b910336dbe",
         "type": "github"
       },
       "original": {
@@ -126,11 +126,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1792219666,
-        "narHash": "sha256-RMO08tKD+hFIL5ryWi85VY4aHE5oIpdV1h4kVFctOkw=",
+        "lastModified": 1792739799,
+        "narHash": "sha256-M2rr/yPbTHvgAzCyZ+zHJHflFM0XU7t42Sw2skA3TQM=",
         "owner": "oxalica",
         "repo": "rust-overlay",
-        "rev": "a110337465cfb76e3806b81b9db3094c3e6e770a",
+        "rev": "b0829a2cc9f7b596583331d78a942c1e5170d8a0",
         "type": "github"
       },
       "original": {
