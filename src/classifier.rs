@@ -67,11 +67,19 @@ pub enum EarlyLangAction {
     PostNsfw,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum DetectionAction {
+    Keep,
+    Delete,
+}
+
 pub struct Classifier {
     pub lang_detector: LanguageDetector,
     pub nsfw_model: Option<NsfwModel>,
     pub default_early_langs: HashSet<String>,
     pub early_lang_action: EarlyLangAction,
+    pub banned_action: DetectionAction,
+    pub nsfw_action: DetectionAction,
 }
 
 impl Classifier {
@@ -80,12 +88,35 @@ impl Classifier {
         nsfw_model: Option<NsfwModel>,
         default_early_langs: HashSet<String>,
         early_lang_action: EarlyLangAction,
+        banned_action: DetectionAction,
+        nsfw_action: DetectionAction,
     ) -> Self {
         Self {
             lang_detector,
             nsfw_model,
             default_early_langs,
             early_lang_action,
+            banned_action,
+            nsfw_action,
+        }
+    }
+
+    fn detection_verdict(
+        action: DetectionAction,
+        tags: Vec<String>,
+        content_type: Option<String>,
+    ) -> ClassificationVerdict {
+        match action {
+            DetectionAction::Keep => ClassificationVerdict {
+                action: VerdictAction::Keep,
+                tags,
+                content_type,
+                ..Default::default()
+            },
+            DetectionAction::Delete => ClassificationVerdict {
+                action: VerdictAction::Delete,
+                ..Default::default()
+            },
         }
     }
 
@@ -110,21 +141,18 @@ impl Classifier {
         early_lang_override: Option<&[String]>,
         classified_tag: Option<&str>,
     ) -> Result<ClassificationVerdict> {
+        let mut tags: Vec<String> = Vec::new();
+        if let Some(tag) = classified_tag.filter(|s| !s.is_empty()) {
+            tags.push(tag.to_string());
+        }
+
         if banned::is_banned(&payload.name)
             || payload
                 .files
                 .iter()
                 .any(|f| is_banned_path_candidate(f) && banned::is_banned(&f.path))
         {
-            return Ok(ClassificationVerdict {
-                action: VerdictAction::Delete,
-                ..Default::default()
-            });
-        }
-
-        let mut tags: Vec<String> = Vec::new();
-        if let Some(tag) = classified_tag.filter(|s| !s.is_empty()) {
-            tags.push(tag.to_string());
+            return Ok(Self::detection_verdict(self.banned_action, tags, None));
         }
 
         let skip_langs: HashSet<&str> = if let Some(override_langs) = early_lang_override {
@@ -174,12 +202,11 @@ impl Classifier {
         if !nsfw::is_mainstream_allowed(&payload.name) {
             if nsfw::is_keyword_nsfw(&payload.name) {
                 tags.push("nsfw-keyword".to_string());
-                return Ok(ClassificationVerdict {
-                    action: VerdictAction::Keep,
+                return Ok(Self::detection_verdict(
+                    self.nsfw_action,
                     tags,
-                    content_type: Some("xxx".to_string()),
-                    ..Default::default()
-                });
+                    Some("xxx".to_string()),
+                ));
             }
 
             // Check sample of file paths for adult keywords (up to 10)
@@ -189,12 +216,11 @@ impl Classifier {
                 }
                 if nsfw::is_keyword_nsfw(&f.path) {
                     tags.push("nsfw-keyword".to_string());
-                    return Ok(ClassificationVerdict {
-                        action: VerdictAction::Keep,
+                    return Ok(Self::detection_verdict(
+                        self.nsfw_action,
                         tags,
-                        content_type: Some("xxx".to_string()),
-                        ..Default::default()
-                    });
+                        Some("xxx".to_string()),
+                    ));
                 }
             }
         }
@@ -268,12 +294,11 @@ impl Classifier {
                         .fold(f32::NEG_INFINITY, f32::max);
                     if max_file_score >= 0.70 {
                         tags.push("nsfw-model".to_string());
-                        return Ok(ClassificationVerdict {
-                            action: VerdictAction::Keep,
+                        return Ok(Self::detection_verdict(
+                            self.nsfw_action,
                             tags,
-                            content_type: Some("xxx".to_string()),
-                            ..Default::default()
-                        });
+                            Some("xxx".to_string()),
+                        ));
                     } else if max_file_score < 0.35 {
                         is_nsfw = false;
                     }
@@ -286,16 +311,19 @@ impl Classifier {
             }
         }
 
-        Ok(ClassificationVerdict {
-            action: VerdictAction::Keep,
-            tags,
-            content_type: if is_nsfw_final {
-                Some("xxx".to_string())
-            } else {
-                None
-            },
-            ..Default::default()
-        })
+        if is_nsfw_final {
+            Ok(Self::detection_verdict(
+                self.nsfw_action,
+                tags,
+                Some("xxx".to_string()),
+            ))
+        } else {
+            Ok(ClassificationVerdict {
+                action: VerdictAction::Keep,
+                tags,
+                ..Default::default()
+            })
+        }
     }
 }
 
@@ -309,6 +337,73 @@ mod tests {
             size: 0,
             extension: extension.map(str::to_string),
         }
+    }
+
+    fn test_payload(name: &str) -> TorrentPayload {
+        TorrentPayload {
+            info_hash: "test".to_string(),
+            name: name.to_string(),
+            size: 0,
+            extension: Some("mp4".to_string()),
+            files: Vec::new(),
+            hint: None,
+        }
+    }
+
+    fn test_classifier(banned_action: DetectionAction, nsfw_action: DetectionAction) -> Classifier {
+        Classifier::new(
+            LanguageDetector::with_whatlang(crate::langid::DEFAULT_THRESHOLD),
+            None,
+            HashSet::new(),
+            EarlyLangAction::SkipsNsfw,
+            banned_action,
+            nsfw_action,
+        )
+    }
+
+    #[test]
+    fn banned_keep_preserves_classification_tag() {
+        let classifier = test_classifier(DetectionAction::Keep, DetectionAction::Delete);
+        let verdict = classifier
+            .classify(&test_payload("pthc collection"), None, Some("ok"))
+            .unwrap();
+
+        assert_eq!(verdict.action, VerdictAction::Keep);
+        assert_eq!(verdict.tags, vec!["ok"]);
+    }
+
+    #[test]
+    fn banned_delete_returns_delete() {
+        let classifier = test_classifier(DetectionAction::Delete, DetectionAction::Keep);
+        let verdict = classifier
+            .classify(&test_payload("pthc collection"), None, Some("ok"))
+            .unwrap();
+
+        assert_eq!(verdict.action, VerdictAction::Delete);
+        assert!(verdict.tags.is_empty());
+    }
+
+    #[test]
+    fn nsfw_keep_preserves_tags_and_content_type() {
+        let classifier = test_classifier(DetectionAction::Keep, DetectionAction::Keep);
+        let verdict = classifier
+            .classify(&test_payload("[Tushy] Kelly Collins"), None, Some("ok"))
+            .unwrap();
+
+        assert_eq!(verdict.action, VerdictAction::Keep);
+        assert!(verdict.tags.contains(&"nsfw-keyword".to_string()));
+        assert_eq!(verdict.content_type.as_deref(), Some("xxx"));
+    }
+
+    #[test]
+    fn nsfw_delete_returns_delete() {
+        let classifier = test_classifier(DetectionAction::Keep, DetectionAction::Delete);
+        let verdict = classifier
+            .classify(&test_payload("[Tushy] Kelly Collins"), None, Some("ok"))
+            .unwrap();
+
+        assert_eq!(verdict.action, VerdictAction::Delete);
+        assert!(verdict.tags.is_empty());
     }
 
     #[test]

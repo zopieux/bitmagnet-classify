@@ -9,7 +9,7 @@ use clap::Parser;
 use rayon::prelude::*;
 use tracing::info;
 
-use bitmagnet_classify::classifier::{Classifier, EarlyLangAction};
+use bitmagnet_classify::classifier::{Classifier, DetectionAction, EarlyLangAction};
 use bitmagnet_classify::client::BitmagnetClient;
 use bitmagnet_classify::langid::LanguageDetector;
 use bitmagnet_classify::models::{
@@ -106,6 +106,24 @@ struct Args {
         help = "Action for torrents matching --early-lang: delete, skips-nsfw, or post-nsfw"
     )]
     early_lang_action: EarlyLangAction,
+
+    #[arg(
+        long = "banned",
+        value_enum,
+        default_value = "delete",
+        env = "BANNED_ACTION",
+        help = "Action for torrents matching banned keywords: keep or delete"
+    )]
+    banned_action: DetectionAction,
+
+    #[arg(
+        long = "nsfw",
+        value_enum,
+        default_value = "delete",
+        env = "NSFW_ACTION",
+        help = "Action for torrents classified as NSFW: keep or delete"
+    )]
+    nsfw_action: DetectionAction,
 
     #[arg(
         long,
@@ -218,6 +236,8 @@ async fn main() -> Result<()> {
         info!("Limit: {} torrents", limit);
     }
     info!("Early language action: {:?}", args.early_lang_action);
+    info!("Banned action: {:?}", args.banned_action);
+    info!("NSFW action: {:?}", args.nsfw_action);
     if let Some(interval) = args.poll_interval {
         info!("Watch mode enabled: poll interval {}s", interval);
     }
@@ -279,6 +299,8 @@ async fn main() -> Result<()> {
         nsfw_model,
         early_lang_set,
         args.early_lang_action,
+        args.banned_action,
+        args.nsfw_action,
     ));
 
     let pool = rayon::ThreadPoolBuilder::new()
