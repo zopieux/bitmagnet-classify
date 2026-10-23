@@ -2,6 +2,7 @@ use anyhow::Result;
 use std::collections::HashSet;
 
 use crate::banned;
+use crate::guards;
 use crate::langid::LanguageDetector;
 use crate::models::{ClassificationVerdict, TorrentFile, TorrentPayload, VerdictAction};
 use crate::nsfw::{self, NsfwModel};
@@ -198,7 +199,6 @@ impl Classifier {
             }
         }
 
-        // 4. Early exit for non-video safe extensions (books, lossless audio, documents)
         let mut file_extensions: HashSet<String> = HashSet::new();
         for f in &payload.files {
             if let Some(ext) = file_extension(f) {
@@ -209,6 +209,20 @@ impl Classifier {
             file_extensions.insert(ext.to_lowercase());
         }
 
+        let has_nsfw_paths = payload
+            .files
+            .iter()
+            .any(|f| is_nsfw_path_candidate(f) && nsfw::is_keyword_nsfw(&f.path));
+
+        if !has_nsfw_paths && guards::is_clean_artifact(&payload.name, &file_extensions) {
+            return Ok(ClassificationVerdict {
+                action: VerdictAction::Keep,
+                tags,
+                ..Default::default()
+            });
+        }
+
+        // 4. Early exit for non-video safe extensions (books, lossless audio, documents)
         if !file_extensions.is_empty() {
             let has_video = file_extensions
                 .iter()

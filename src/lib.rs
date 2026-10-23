@@ -1,6 +1,7 @@
 pub mod banned;
 pub mod classifier;
 pub mod client;
+pub mod guards;
 pub mod langid;
 pub mod models;
 pub mod nsfw;
