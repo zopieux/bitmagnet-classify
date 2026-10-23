@@ -13,9 +13,28 @@ use bitmagnet_classify::classifier::{Classifier, DetectionAction, EarlyLangActio
 use bitmagnet_classify::client::BitmagnetClient;
 use bitmagnet_classify::langid::LanguageDetector;
 use bitmagnet_classify::models::{
-    self, DryRunClassificationItem, PatchClassificationItem, VerdictAction,
+    self, ApiClassificationItem, DryRunClassificationItem, PatchClassificationItem, VerdictAction,
 };
 use bitmagnet_classify::nsfw::{NsfwDevice, NsfwModel};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BatchSize {
+    Fixed(usize),
+    Adaptive,
+}
+
+fn parse_batch_size(value: &str) -> Result<BatchSize, String> {
+    if value.eq_ignore_ascii_case("adaptive") {
+        return Ok(BatchSize::Adaptive);
+    }
+    match value.parse::<usize>() {
+        Ok(0) => Err("batch size must be greater than zero".to_string()),
+        Ok(size) => Ok(BatchSize::Fixed(size)),
+        Err(_) => Err(format!(
+            "expected a positive integer or 'adaptive', got {value:?}"
+        )),
+    }
+}
 
 #[derive(Parser, Debug)]
 #[command(
@@ -53,11 +72,13 @@ struct Args {
 
     #[arg(
         long,
-        default_value_t = 50,
+        default_value = "adaptive",
+        value_name = "N|adaptive",
+        value_parser = parse_batch_size,
         env = "BATCH_SIZE",
-        help = "Batch size for reading and writing torrents"
+        help = "Batch size for reading and writing torrents, or 'adaptive' to tune it dynamically"
     )]
-    batch_size: usize,
+    batch_size: BatchSize,
 
     #[arg(
         long,
@@ -181,6 +202,78 @@ struct Args {
     dry_run: bool,
 }
 
+const ADAPTIVE_MIN_BATCH_SIZE: usize = 1;
+const ADAPTIVE_INITIAL_BATCH_SIZE: usize = 50;
+const ADAPTIVE_INCREASE_STEP: usize = 10;
+const ADAPTIVE_THROUGHPUT_IMPROVEMENT: f64 = 0.01;
+const ADAPTIVE_THROUGHPUT_REGRESSION: f64 = 0.05;
+const ADAPTIVE_THROUGHPUT_SMOOTHING: f64 = 0.7;
+
+struct AdaptiveBatchSize {
+    current: usize,
+    throughput: Option<f64>,
+    best_throughput: f64,
+}
+
+impl AdaptiveBatchSize {
+    fn new() -> Self {
+        Self {
+            current: ADAPTIVE_INITIAL_BATCH_SIZE,
+            throughput: None,
+            best_throughput: 0.0,
+        }
+    }
+
+    fn current(&self) -> usize {
+        self.current
+    }
+
+    fn update(&mut self, batch_count: usize, elapsed: Duration) -> Option<usize> {
+        let sample = batch_count as f64 / elapsed.as_secs_f64().max(0.001);
+        let smoothed = match self.throughput {
+            Some(previous) => {
+                previous * ADAPTIVE_THROUGHPUT_SMOOTHING
+                    + sample * (1.0 - ADAPTIVE_THROUGHPUT_SMOOTHING)
+            }
+            None => sample,
+        };
+        self.throughput = Some(smoothed);
+
+        if self.best_throughput == 0.0 {
+            self.best_throughput = smoothed;
+            return None;
+        }
+
+        let previous_size = self.current;
+        if smoothed > self.best_throughput * (1.0 + ADAPTIVE_THROUGHPUT_IMPROVEMENT) {
+            self.best_throughput = smoothed;
+            self.current = self.current.saturating_add(ADAPTIVE_INCREASE_STEP);
+        } else if smoothed < self.best_throughput * (1.0 - ADAPTIVE_THROUGHPUT_REGRESSION) {
+            self.current = (self.current / 2).max(ADAPTIVE_MIN_BATCH_SIZE);
+            self.best_throughput = smoothed;
+        } else {
+            return None;
+        }
+
+        (self.current != previous_size).then_some(self.current)
+    }
+}
+
+type FetchResult = (usize, Result<Vec<ApiClassificationItem>>, Duration);
+
+async fn timed_fetch(
+    client: BitmagnetClient,
+    limit: usize,
+    exclude_tag: Option<String>,
+    query_tag: Option<String>,
+) -> FetchResult {
+    let started = Instant::now();
+    let result = client
+        .get_batch(limit, exclude_tag.as_deref(), query_tag.as_deref())
+        .await;
+    (limit, result, started.elapsed())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -205,6 +298,8 @@ async fn main() -> Result<()> {
     } else {
         Some(args.tag.as_str())
     };
+    let exclude_tag_owned = exclude_tag.map(str::to_string);
+    let query_tag_owned = args.query_tag.clone();
 
     let client = BitmagnetClient::new(&args.endpoint, args.user.as_deref())
         .with_context(|| format!("Failed to initialize client for endpoint {}", args.endpoint))?;
@@ -220,7 +315,13 @@ async fn main() -> Result<()> {
         info!("Authentication: Basic auth enabled");
     }
     info!("Threads: {}", num_threads);
-    info!("Batch size: {}", args.batch_size);
+    match args.batch_size {
+        BatchSize::Fixed(size) => info!("Batch size: {size}"),
+        BatchSize::Adaptive => info!(
+            "Batch size: adaptive (initial {}, min {}, +{} on improving throughput, halve on regression)",
+            ADAPTIVE_INITIAL_BATCH_SIZE, ADAPTIVE_MIN_BATCH_SIZE, ADAPTIVE_INCREASE_STEP
+        ),
+    }
     info!("Max rate: {} items/s", args.rate);
     match exclude_tag {
         Some(tag) => info!(
@@ -333,23 +434,43 @@ async fn main() -> Result<()> {
         eprintln!("Mode: reprocess all torrents");
     }
 
+    let mut batch_size = match args.batch_size {
+        BatchSize::Fixed(size) => size,
+        BatchSize::Adaptive => ADAPTIVE_INITIAL_BATCH_SIZE,
+    };
+    let mut adaptive_batch_size = match args.batch_size {
+        BatchSize::Adaptive => Some(AdaptiveBatchSize::new()),
+        BatchSize::Fixed(_) => None,
+    };
+    let mut pending_fetch: Option<tokio::task::JoinHandle<FetchResult>> = None;
+
     while running.load(Ordering::SeqCst) {
         let batch_start = Instant::now();
 
-        let batch_limit = if let Some(limit) = args.limit {
-            if total_processed >= limit {
+        let (batch_limit, fetch_result, fetch_elapsed) = if let Some(handle) = pending_fetch.take()
+        {
+            handle.await.context("Batch fetch task failed")?
+        } else {
+            if let Some(limit) = args.limit
+                && total_processed >= limit
+            {
                 break;
             }
-            std::cmp::min(args.batch_size, limit - total_processed)
-        } else {
-            args.batch_size
+            let batch_limit = if let Some(limit) = args.limit {
+                batch_size.min(limit - total_processed)
+            } else {
+                batch_size
+            };
+            timed_fetch(
+                client.clone(),
+                batch_limit,
+                exclude_tag_owned.clone(),
+                query_tag_owned.clone(),
+            )
+            .await
         };
 
-        // 1. Fetch batch from API
-        let items = match client
-            .get_batch(batch_limit, exclude_tag, args.query_tag.as_deref())
-            .await
-        {
+        let items = match fetch_result {
             Ok(items) => items,
             Err(e) => {
                 tracing::error!("Failed to fetch batch from API: {:#}", e);
@@ -380,7 +501,28 @@ async fn main() -> Result<()> {
         let batch_count = items.len();
         batch_num += 1;
 
-        // 2. Classify items in parallel
+        let next_limit = if let Some(limit) = args.limit {
+            let processed_after_current = total_processed + batch_count;
+            if processed_after_current >= limit {
+                None
+            } else {
+                Some(batch_size.min(limit - processed_after_current))
+            }
+        } else {
+            Some(batch_size)
+        };
+
+        pending_fetch = next_limit.map(|limit| {
+            tokio::spawn(timed_fetch(
+                client.clone(),
+                limit,
+                exclude_tag_owned.clone(),
+                query_tag_owned.clone(),
+            ))
+        });
+
+        // 2. Classify items in parallel while the next batch is being fetched
+        let classify_start = Instant::now();
         let classifier_ref = classifier.clone();
         let early_langs_ref = &early_lang_vec;
         let tag_ref = &args.tag;
@@ -413,8 +555,10 @@ async fn main() -> Result<()> {
                 })
                 .collect()
         });
+        let classify_elapsed = classify_start.elapsed();
 
         // 3. Send updates back to API (or print formatted review JSON to stdout if dry-run)
+        let patch_start = Instant::now();
         let updated_count = if args.dry_run {
             let review: Vec<DryRunClassificationItem> = items
                 .iter()
@@ -436,11 +580,26 @@ async fn main() -> Result<()> {
                 }
             }
         };
+        let patch_elapsed = patch_start.elapsed();
+        let process_elapsed = classify_elapsed + patch_elapsed;
 
         total_processed += batch_count;
         total_updated += updated_count;
 
         let batch_elapsed = batch_start.elapsed();
+        let throughput = batch_count as f64 / batch_elapsed.as_secs_f64().max(0.001);
+
+        if let Some(ref mut adaptive) = adaptive_batch_size {
+            let previous = adaptive.current();
+            if let Some(new_size) = adaptive.update(batch_count, batch_elapsed) {
+                batch_size = new_size;
+                info!(
+                    "Adaptive batch size: {} -> {} ({:.1} items/s; fetch {:.2?}, process {:.2?})",
+                    previous, new_size, throughput, fetch_elapsed, process_elapsed
+                );
+            }
+        }
+
         let overall_elapsed = overall_start.elapsed().as_secs_f64();
         let current_rate = if overall_elapsed > 0.0 {
             total_processed as f64 / overall_elapsed
@@ -449,8 +608,15 @@ async fn main() -> Result<()> {
         };
 
         eprintln!(
-            "Batch #{}: processed {} torrents in {:.2?} (total: {}, rate: {:.1} items/s)",
-            batch_num, batch_count, batch_elapsed, total_processed, current_rate
+            "Batch #{}: processed {} torrents in {:.2?} (batch: {}, fetch: {:.2?}, process: {:.2?}, total: {}, rate: {:.1} items/s)",
+            batch_num,
+            batch_count,
+            batch_elapsed,
+            batch_limit,
+            fetch_elapsed,
+            process_elapsed,
+            total_processed,
+            current_rate
         );
 
         // Rate limiting
@@ -505,5 +671,62 @@ fn print_dry_run_summary(items: &[DryRunClassificationItem]) {
     eprintln!("Dry-run results ({} items):", items.len());
     for (group, count) in groups {
         eprintln!("  {count:>4}  {group}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_fixed_and_adaptive_batch_sizes() {
+        assert_eq!(parse_batch_size("50"), Ok(BatchSize::Fixed(50)));
+        assert_eq!(parse_batch_size("adaptive"), Ok(BatchSize::Adaptive));
+        assert_eq!(parse_batch_size("ADAPTIVE"), Ok(BatchSize::Adaptive));
+        assert!(parse_batch_size("0").is_err());
+        assert!(parse_batch_size("-1").is_err());
+    }
+
+    #[test]
+    fn adaptive_batch_starts_without_changing_size() {
+        let mut adaptive = AdaptiveBatchSize::new();
+        assert_eq!(adaptive.update(50, Duration::from_secs(1)), None);
+        assert_eq!(adaptive.current(), 50);
+    }
+
+    #[test]
+    fn adaptive_batch_increases_on_throughput_improvement() {
+        let mut adaptive = AdaptiveBatchSize::new();
+        adaptive.throughput = Some(100.0);
+        adaptive.best_throughput = 100.0;
+        assert_eq!(adaptive.update(200, Duration::from_secs(1)), Some(60));
+    }
+
+    #[test]
+    fn adaptive_batch_halves_on_throughput_regression() {
+        let mut adaptive = AdaptiveBatchSize::new();
+        adaptive.current = 200;
+        adaptive.throughput = Some(100.0);
+        adaptive.best_throughput = 100.0;
+        assert_eq!(adaptive.update(10, Duration::from_secs(1)), Some(100));
+    }
+
+    #[test]
+    fn adaptive_batch_detects_sustained_regression() {
+        let mut adaptive = AdaptiveBatchSize::new();
+        adaptive.current = 200;
+        adaptive.throughput = Some(100.0);
+        adaptive.best_throughput = 100.0;
+        assert_eq!(adaptive.update(90, Duration::from_secs(1)), None);
+        assert_eq!(adaptive.update(90, Duration::from_secs(1)), Some(100));
+    }
+
+    #[test]
+    fn adaptive_batch_has_no_upper_bound() {
+        let mut adaptive = AdaptiveBatchSize::new();
+        adaptive.current = 500;
+        adaptive.throughput = Some(100.0);
+        adaptive.best_throughput = 100.0;
+        assert_eq!(adaptive.update(200, Duration::from_secs(1)), Some(510));
     }
 }
