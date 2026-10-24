@@ -610,17 +610,56 @@ async fn main() -> Result<()> {
             0.0
         };
 
-        eprintln!(
-            "Batch #{}: processed {} torrents in {:.2?} (batch: {}, fetch: {:.2?}, process: {:.2?}, total: {}, rate: {:.1} items/s)",
-            batch_num,
-            batch_count,
-            batch_elapsed,
-            batch_limit,
-            fetch_elapsed,
-            process_elapsed,
-            total_processed,
-            current_rate
-        );
+        let mut deleted_count = 0usize;
+        let mut kept_ok_count = 0usize;
+        let mut tag_counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+        for p in &patch_items {
+            if p.action == "delete" {
+                deleted_count += 1;
+            } else {
+                kept_ok_count += 1;
+                for t in &p.tags {
+                    *tag_counts.entry(t.clone()).or_insert(0) += 1;
+                }
+            }
+        }
+        let mut tag_summary = String::new();
+        for (k, v) in &tag_counts {
+            if !tag_summary.is_empty() {
+                tag_summary.push_str(", ");
+            }
+            tag_summary.push_str(&format!("{} '{}'", v, k));
+        }
+        if tag_summary.is_empty() {
+            eprintln!(
+                "Batch #{}: processed {} torrents in {:.0}s (batch: {}, fetch: {:.0}s, process: {:.0}s, total: {}, rate: {:.1} items/s): {} 'ok', {} deleted",
+                batch_num,
+                batch_count,
+                batch_elapsed.as_secs_f64(),
+                batch_limit,
+                fetch_elapsed.as_secs_f64(),
+                process_elapsed.as_secs_f64(),
+                total_processed,
+                current_rate,
+                kept_ok_count,
+                deleted_count
+            );
+        } else {
+            eprintln!(
+                "Batch #{}: processed {} torrents in {:.0}s (batch: {}, fetch: {:.0}s, process: {:.0}s, total: {}, rate: {:.1} items/s): {} 'ok', {}, {} deleted",
+                batch_num,
+                batch_count,
+                batch_elapsed.as_secs_f64(),
+                batch_limit,
+                fetch_elapsed.as_secs_f64(),
+                process_elapsed.as_secs_f64(),
+                total_processed,
+                current_rate,
+                kept_ok_count,
+                tag_summary,
+                deleted_count
+            );
+        }
 
         // Rate limiting
         if args.rate > 0 {

@@ -99,31 +99,6 @@
           rustc = rustToolchain;
         };
 
-        rustClassifierPkg = rustPlatform.buildRustPackage {
-          pname = "bitmagnet-classify";
-          version = "0.1.0";
-          src = ./.;
-          cargoLock = {
-            lockFile = ./Cargo.lock;
-          };
-          RUSTFLAGS = "--remap-path-prefix ${rustToolchain}=/rustc";
-          nativeBuildInputs = [
-            pkgs.pkg-config
-            pkgs.makeWrapper
-          ];
-          buildInputs = [
-            pkgs.onnxruntime
-          ];
-          postFixup = ''
-            wrapProgram $out/bin/bitmagnet-classify \
-              --set-default FASTTEXT_MODEL_PATH "${fasttext-model}" \
-              --set-default NSFW_ONNX_PATH "${e5Model}" \
-              --set-default ORT_DYLIB_PATH "${pkgs.onnxruntime}/lib/libonnxruntime.so"
-          '';
-
-          meta.mainProgram = "bitmagnet-classify";
-        };
-
         cudaPkgs = import nixpkgs {
           inherit system;
           config = {
@@ -131,6 +106,40 @@
             cudaSupport = true;
           };
         };
+
+        makeRustClassifierPkg =
+          {
+            cudaSupport ? false,
+          }:
+          let
+            activePkgs = if cudaSupport then cudaPkgs else pkgs;
+          in
+          rustPlatform.buildRustPackage {
+            pname = "bitmagnet-classify";
+            version = "0.1.0";
+            src = ./.;
+            cargoLock = {
+              lockFile = ./Cargo.lock;
+            };
+            RUSTFLAGS = "--remap-path-prefix ${rustToolchain}=/rustc";
+            nativeBuildInputs = [
+              pkgs.pkg-config
+              pkgs.makeWrapper
+            ];
+            buildInputs = [
+              activePkgs.onnxruntime
+            ];
+            postFixup = ''
+              wrapProgram $out/bin/bitmagnet-classify \
+                --set-default FASTTEXT_MODEL_PATH "${fasttext-model}" \
+                --set-default NSFW_ONNX_PATH "${e5Model}" \
+                --set-default ORT_DYLIB_PATH "${activePkgs.onnxruntime}/lib/libonnxruntime.so"
+            '';
+
+            meta.mainProgram = "bitmagnet-classify";
+          };
+
+        rustClassifierPkg = pkgs.lib.makeOverridable makeRustClassifierPkg { };
 
         cudaPythonPackages = cudaPkgs.python314Packages;
       in
