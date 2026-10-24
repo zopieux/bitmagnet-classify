@@ -62,6 +62,7 @@ fn is_banned_path_candidate(file: &TorrentFile) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
 pub enum EarlyLangAction {
     Delete,
+    Archive,
     #[default]
     SkipsNsfw,
     PostNsfw,
@@ -71,6 +72,7 @@ pub enum EarlyLangAction {
 pub enum DetectionAction {
     Keep,
     Delete,
+    Archive,
 }
 
 pub struct Classifier {
@@ -117,6 +119,10 @@ impl Classifier {
                 action: VerdictAction::Delete,
                 ..Default::default()
             },
+            DetectionAction::Archive => ClassificationVerdict {
+                action: VerdictAction::Archive,
+                ..Default::default()
+            },
         }
     }
 
@@ -124,6 +130,10 @@ impl Classifier {
         match self.early_lang_action {
             EarlyLangAction::Delete => Some(ClassificationVerdict {
                 action: VerdictAction::Delete,
+                ..Default::default()
+            }),
+            EarlyLangAction::Archive => Some(ClassificationVerdict {
+                action: VerdictAction::Archive,
                 ..Default::default()
             }),
             EarlyLangAction::SkipsNsfw => Some(ClassificationVerdict {
@@ -384,6 +394,17 @@ mod tests {
     }
 
     #[test]
+    fn banned_archive_returns_archive() {
+        let classifier = test_classifier(DetectionAction::Archive, DetectionAction::Keep);
+        let verdict = classifier
+            .classify(&test_payload("pthc collection"), None, Some("ok"))
+            .unwrap();
+
+        assert_eq!(verdict.action, VerdictAction::Archive);
+        assert!(verdict.tags.is_empty());
+    }
+
+    #[test]
     fn nsfw_keep_preserves_tags_and_content_type() {
         let classifier = test_classifier(DetectionAction::Keep, DetectionAction::Keep);
         let verdict = classifier
@@ -403,6 +424,17 @@ mod tests {
             .unwrap();
 
         assert_eq!(verdict.action, VerdictAction::Delete);
+        assert!(verdict.tags.is_empty());
+    }
+
+    #[test]
+    fn nsfw_archive_returns_archive() {
+        let classifier = test_classifier(DetectionAction::Keep, DetectionAction::Archive);
+        let verdict = classifier
+            .classify(&test_payload("[Tushy] Kelly Collins"), None, Some("ok"))
+            .unwrap();
+
+        assert_eq!(verdict.action, VerdictAction::Archive);
         assert!(verdict.tags.is_empty());
     }
 

@@ -14,6 +14,7 @@ pub enum VerdictAction {
     #[default]
     Keep,
     Delete,
+    Archive,
     Unmatched,
 }
 
@@ -22,6 +23,7 @@ impl std::fmt::Display for VerdictAction {
         match self {
             Self::Keep => write!(f, "keep"),
             Self::Delete => write!(f, "delete"),
+            Self::Archive => write!(f, "archive"),
             Self::Unmatched => write!(f, "unmatched"),
         }
     }
@@ -161,7 +163,7 @@ pub struct ApiGetBatchResponse {
 #[serde(rename_all = "camelCase")]
 pub struct PatchClassificationItem {
     pub info_hash: String,
-    pub action: String, // "do_nothing" or "delete"
+    pub action: String,
     pub tags: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_type: Option<String>,

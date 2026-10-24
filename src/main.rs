@@ -122,9 +122,9 @@ struct Args {
     #[arg(
         long = "early",
         value_enum,
-        default_value = "skips-nsfw",
+        default_value = "archive",
         env = "EARLY",
-        help = "Action for torrents matching --early-lang: delete, skips-nsfw, or post-nsfw"
+        help = "Action for torrents matching --early-lang: delete, archive, skips-nsfw, or post-nsfw"
     )]
     early_lang_action: EarlyLangAction,
 
@@ -133,16 +133,16 @@ struct Args {
         value_enum,
         default_value = "delete",
         env = "BANNED_ACTION",
-        help = "Action for torrents matching banned keywords: keep or delete"
+        help = "Action for torrents matching banned keywords: keep, delete, or archive"
     )]
     banned_action: DetectionAction,
 
     #[arg(
         long = "nsfw",
         value_enum,
-        default_value = "delete",
+        default_value = "archive",
         env = "NSFW_ACTION",
-        help = "Action for torrents classified as NSFW: keep or delete"
+        help = "Action for torrents classified as NSFW: keep, delete, or archive"
     )]
     nsfw_action: DetectionAction,
 
@@ -534,6 +534,7 @@ async fn main() -> Result<()> {
 
                     let action = match verdict.action {
                         VerdictAction::Delete => "delete".to_string(),
+                        VerdictAction::Archive => "archive".to_string(),
                         _ => "do_nothing".to_string(),
                     };
 
@@ -611,11 +612,15 @@ async fn main() -> Result<()> {
         };
 
         let mut deleted_count = 0usize;
+        let mut archived_count = 0usize;
         let mut kept_ok_count = 0usize;
-        let mut tag_counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+        let mut tag_counts: std::collections::BTreeMap<String, usize> =
+            std::collections::BTreeMap::new();
         for p in &patch_items {
             if p.action == "delete" {
                 deleted_count += 1;
+            } else if p.action == "archive" {
+                archived_count += 1;
             } else {
                 kept_ok_count += 1;
                 for t in &p.tags {
@@ -623,6 +628,14 @@ async fn main() -> Result<()> {
                 }
             }
         }
+        let mut action_counts = Vec::new();
+        if deleted_count > 0 || archived_count == 0 {
+            action_counts.push(format!("{deleted_count} deleted"));
+        }
+        if archived_count > 0 {
+            action_counts.push(format!("{archived_count} archived"));
+        }
+        let action_summary = action_counts.join(", ");
         let mut tag_summary = String::new();
         for (k, v) in &tag_counts {
             if !tag_summary.is_empty() {
@@ -632,7 +645,7 @@ async fn main() -> Result<()> {
         }
         if tag_summary.is_empty() {
             eprintln!(
-                "Batch #{}: processed {} torrents in {:.0}s (batch: {}, fetch: {:.0}s, process: {:.0}s, total: {}, rate: {:.1} items/s): {} 'ok', {} deleted",
+                "Batch #{}: processed {} torrents in {:.0}s (batch: {}, fetch: {:.0}s, process: {:.0}s, total: {}, rate: {:.1} items/s): {} 'ok', {}",
                 batch_num,
                 batch_count,
                 batch_elapsed.as_secs_f64(),
@@ -642,11 +655,11 @@ async fn main() -> Result<()> {
                 total_processed,
                 current_rate,
                 kept_ok_count,
-                deleted_count
+                action_summary
             );
         } else {
             eprintln!(
-                "Batch #{}: processed {} torrents in {:.0}s (batch: {}, fetch: {:.0}s, process: {:.0}s, total: {}, rate: {:.1} items/s): {} 'ok', {}, {} deleted",
+                "Batch #{}: processed {} torrents in {:.0}s (batch: {}, fetch: {:.0}s, process: {:.0}s, total: {}, rate: {:.1} items/s): {} 'ok', {}, {}",
                 batch_num,
                 batch_count,
                 batch_elapsed.as_secs_f64(),
@@ -657,7 +670,7 @@ async fn main() -> Result<()> {
                 current_rate,
                 kept_ok_count,
                 tag_summary,
-                deleted_count
+                action_summary
             );
         }
 
@@ -697,8 +710,8 @@ fn print_dry_run_summary(items: &[DryRunClassificationItem]) {
             .collect();
         result_tags.sort_unstable();
 
-        let key = if item.action == "delete" {
-            "delete".to_string()
+        let key = if item.action == "delete" || item.action == "archive" {
+            item.action.clone()
         } else if result_tags.is_empty() {
             "unclassified".to_string()
         } else {
