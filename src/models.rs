@@ -1,4 +1,12 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+
+fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -22,8 +30,9 @@ impl std::fmt::Display for VerdictAction {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TorrentFile {
+    #[serde(default, deserialize_with = "null_as_default")]
     pub path: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub size: u64,
     #[serde(default)]
     pub extension: Option<String>,
@@ -39,15 +48,15 @@ pub struct TorrentHint {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ApiTorrent {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub info_hash: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub name: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub size: u64,
     #[serde(default)]
     pub extension: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub files: Vec<TorrentFile>,
     #[serde(default)]
     pub hint: Option<TorrentHint>,
@@ -95,10 +104,11 @@ impl Default for ClassificationVerdict {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApiClassificationItem {
+    #[serde(default, deserialize_with = "null_as_default")]
     pub info_hash: String,
     #[serde(default)]
     pub content_type: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub size: u64,
     #[serde(default)]
     pub torrent: Option<ApiTorrent>,
@@ -143,7 +153,7 @@ impl ApiClassificationItem {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApiGetBatchResponse {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub items: Vec<ApiClassificationItem>,
 }
 

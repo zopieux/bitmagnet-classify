@@ -512,16 +512,7 @@ async fn main() -> Result<()> {
             Some(batch_size)
         };
 
-        pending_fetch = next_limit.map(|limit| {
-            tokio::spawn(timed_fetch(
-                client.clone(),
-                limit,
-                exclude_tag_owned.clone(),
-                query_tag_owned.clone(),
-            ))
-        });
-
-        // 2. Classify items in parallel while the next batch is being fetched
+        // 2. Classify items in parallel
         let classify_start = Instant::now();
         let classifier_ref = classifier.clone();
         let early_langs_ref = &early_lang_vec;
@@ -582,6 +573,18 @@ async fn main() -> Result<()> {
         };
         let patch_elapsed = patch_start.elapsed();
         let process_elapsed = classify_elapsed + patch_elapsed;
+
+        // Only prefetch after this batch has been applied, otherwise the next
+        // GET can overlap with unpatched items (and with deletions), causing
+        // duplicate work and inconsistent responses.
+        pending_fetch = next_limit.map(|limit| {
+            tokio::spawn(timed_fetch(
+                client.clone(),
+                limit,
+                exclude_tag_owned.clone(),
+                query_tag_owned.clone(),
+            ))
+        });
 
         total_processed += batch_count;
         total_updated += updated_count;

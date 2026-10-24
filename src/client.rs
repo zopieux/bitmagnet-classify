@@ -118,7 +118,41 @@ impl BitmagnetClient {
     }
 
     /// Sends a batch of classification updates to bitmagnet.
+    ///
+    /// If the server rejects the batch because a tag references a torrent that
+    /// no longer exists, the batch is split and retried so that one stale item
+    /// cannot block the rest of the batch.
     pub async fn patch_batch(&self, items: &[PatchClassificationItem]) -> Result<usize> {
+        let mut pending: Vec<&[PatchClassificationItem]> = vec![items];
+        let mut updated = 0;
+
+        while let Some(chunk) = pending.pop() {
+            match self.patch_batch_once(chunk).await {
+                Ok(count) => updated += count,
+                Err(error) if is_foreign_key_error(&error) => {
+                    if chunk.len() <= 1 {
+                        if let Some(item) = chunk.first() {
+                            tracing::warn!(
+                                "Skipping patch for {} after foreign key error: {:#}",
+                                item.info_hash,
+                                error
+                            );
+                        }
+                    } else {
+                        let mid = chunk.len() / 2;
+                        let (left, right) = chunk.split_at(mid);
+                        pending.push(left);
+                        pending.push(right);
+                    }
+                }
+                Err(error) => return Err(error),
+            }
+        }
+
+        Ok(updated)
+    }
+
+    async fn patch_batch_once(&self, items: &[PatchClassificationItem]) -> Result<usize> {
         if items.is_empty() {
             return Ok(0);
         }
@@ -151,5 +185,27 @@ impl BitmagnetClient {
             .with_context(|| format!("Failed to parse PATCH response from {}", self.endpoint))?;
 
         Ok(res.updated)
+    }
+}
+
+fn is_foreign_key_error(error: &anyhow::Error) -> bool {
+    format!("{error:#}")
+        .to_ascii_lowercase()
+        .contains("foreign key")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_foreign_key_errors() {
+        let error = anyhow::anyhow!(
+            "PATCH http://localhost/api/v1/classification returned status 500: {{\"error\":\"constraint failed: FOREIGN KEY constraint failed (787)\"}}"
+        );
+        assert!(is_foreign_key_error(&error));
+        assert!(!is_foreign_key_error(&anyhow::anyhow!(
+            "connection refused"
+        )));
     }
 }
