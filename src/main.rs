@@ -179,6 +179,14 @@ struct Args {
 
     #[arg(
         long,
+        default_value_t = bitmagnet_classify::langid::DEFAULT_THRESHOLD,
+        env = "LANG_THRESHOLD",
+        help = "Confidence threshold for language identification"
+    )]
+    lang_threshold: f32,
+
+    #[arg(
+        long,
         env = "ORT_DYLIB_PATH",
         help = "Path to ONNX Runtime shared library"
     )]
@@ -375,10 +383,10 @@ async fn main() -> Result<()> {
             anyhow::bail!("FastText model file does not exist: {:?}", path);
         }
         info!("Language model: fastText enabled ({:?})", path);
-        LanguageDetector::load_fasttext(path, bitmagnet_classify::langid::DEFAULT_THRESHOLD)?
+        LanguageDetector::load_fasttext(path, args.lang_threshold)?
     } else {
         info!("Language model: whatlang (model unset, using fallback)");
-        LanguageDetector::with_whatlang(bitmagnet_classify::langid::DEFAULT_THRESHOLD)
+        LanguageDetector::with_whatlang(args.lang_threshold)
     };
 
     let early_lang_set: HashSet<String> = args
@@ -783,5 +791,18 @@ mod tests {
         adaptive.throughput = Some(100.0);
         adaptive.best_throughput = 100.0;
         assert_eq!(adaptive.update(200, Duration::from_secs(1)), Some(510));
+    }
+
+    #[test]
+    fn parses_lang_threshold() {
+        let default_args = Args::try_parse_from(["bitmagnet-classify"]).unwrap();
+        assert_eq!(
+            default_args.lang_threshold,
+            bitmagnet_classify::langid::DEFAULT_THRESHOLD
+        );
+
+        let custom_args =
+            Args::try_parse_from(["bitmagnet-classify", "--lang-threshold", "0.85"]).unwrap();
+        assert_eq!(custom_args.lang_threshold, 0.85);
     }
 }
